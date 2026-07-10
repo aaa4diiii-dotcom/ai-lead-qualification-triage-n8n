@@ -1,0 +1,454 @@
+{
+  "name": "Client filteration",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "about service ",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Name ",
+              "placeholder": "Type your name"
+            },
+            {
+              "fieldLabel": "Email Address",
+              "fieldType": "email",
+              "placeholder": "Type your correct email ",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Company or Workplace Name ",
+              "placeholder": "Type your Company or Workplace Name "
+            },
+            {
+              "fieldLabel": "Company size",
+              "fieldType": "number"
+            },
+            {
+              "fieldLabel": "Estimated Budget",
+              "placeholder": "Type your Estimated Budget",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Description ",
+              "placeholder": "Tell us about your problem. *Imp Step ",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        -304,
+        -16
+      ],
+      "id": "7a6999f1-c429-482d-b77c-4a1582c740c7",
+      "name": "On form submission",
+      "webhookId": "6147825a-5d26-4422-8b37-625c6d44a8c2"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Estimated Budget: {{ $json.llmPrompt.budget }}\nProject Description: {{ $json.llmPrompt.description }}",
+        "options": {
+          "systemMessage": "You are an expert Lead Triage AI Specialist for an automation agency. Your job is to analyze inbound client inquiries and classify them into strict service tiers based on two primary data points provided in the input: a project description and an estimated budget.\n\n### CLASSIFICATION CRITERIA:\n1. \"BIG CLIENT\" (Enterprise / Premium Tier):\n   - Meets ANY of the following:\n     * The estimated budget is $2,500 or higher.\n     * The description indicates complex workflow ecosystems (e.g., cross-platform orchestration, CRM syncing, custom database deployments, multi-stage pipelines).\n     * The team size or order volume mentioned is high (e.g., managing 50+ orders/day, or a team scaling rapidly).\n\n2. \"SMALL CLIENT\" (Standard / Growth Tier):\n   - Meets ALL of the following:\n     * The estimated budget is strictly under $2,500.\n     * The description asks for simple, isolated automation fixes (e.g., a single landing page hook, a minor form lookup, basic simple email triggers).\n\n### OUTPUT FORMAT:\nYou must respond ONLY in a valid JSON object. Do not include any introductory text, markdown backticks (```json), explanation, or conversational prose. \n\nOutput exactly this structure:\n{\n  \"client_classification\": \"BIG CLIENT\" or \"SMALL CLIENT\",\n  \"confidence_score\": 0.0 to 1.0,\n  \"justification\": \"A brief 1-2 sentence technical reason explaining why this tier was selected based on the budget and description data.\"\n}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        176,
+        -16
+      ],
+      "id": "f626db25-1f30-49bd-b6a9-c4c23be68f9a",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.1-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        80,
+        144
+      ],
+      "id": "fb6282bc-9f45-4207-98be-99b145036d58",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "pisq4zZIOXzaPRQj",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = [];\n\nfor (const item of $input.all()) {\n  \n  // 1. Create a safe, lowercase version of the keys\n  const safeJson = {};\n  for (const key in item.json) {\n    const cleanKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');\n    safeJson[cleanKey] = item.json[key];\n  }\n\n  // 2. Clean up the budget text into a pure number\n  const rawBudget = safeJson['estimatedbudget'] || 0;\n  let cleanBudget = 0;\n  if (typeof rawBudget === 'string') {\n    cleanBudget = parseFloat(rawBudget.replace(/[^0-9.]/g, '')) || 0;\n  } else {\n    cleanBudget = Number(rawBudget) || 0;\n  }\n\n  // 3. Pack the data neatly into clientData and llmPrompt\n  result.push({\n    json: {\n      clientData: {\n        name: safeJson['name'] || '',\n        email: safeJson['emailaddress'] || '',\n        companyName: safeJson['companyorworkplacename'] || '',\n        companySize: safeJson['companysize'] || 0,\n        budget: cleanBudget\n      },\n      llmPrompt: {\n        description: safeJson['description'] || '',\n        budget: cleanBudget // Placed neatly inside the same folder!\n      }\n    }\n  });\n}\n\nreturn result;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -96,
+        -16
+      ],
+      "id": "3d5afcfb-3711-488c-a3c3-8cdd60c83547",
+      "name": "seprate data"
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = [];\n\nfor (const item of $input.all()) {\n  const rawText = item.json.output || '';\n  let clientClassification = 'UNKNOWN';\n  let justification = '';\n\n  try {\n    const cleanJsonString = rawText.replace(/```json/g, '').replace(/```/g, '').trim();\n    const parsedAiData = JSON.parse(cleanJsonString);\n    clientClassification = parsedAiData.client_classification || 'UNKNOWN';\n    justification = parsedAiData.justification || '';\n  } catch (error) {\n    if (rawText.toLowerCase().includes('big client')) {\n      clientClassification = 'BIG CLIENT';\n    } else if (rawText.toLowerCase().includes('small client')) {\n      clientClassification = 'SMALL CLIENT';\n    }\n    justification = rawText; \n  }\n\n  // Safely grab the complete client details from the very first JS node\n  const originalDetails = $node['seprate data']?.json?.clientData || {};\n  const originalDescription = $node['seprate data']?.json?.llmPrompt?.description || '';\n\n  // Output EVERYTHING side-by-side in one single row item\n  result.push({\n    json: {\n      name: originalDetails.name || '',\n      email: originalDetails.email || '',\n      companyName: originalDetails.companyName || '',\n      companySize: originalDetails.companySize || 0,\n      budget: originalDetails.budget || 0,\n      projectDescription: originalDescription,\n      clientClassification: clientClassification,\n      justification: justification\n    }\n  });\n}\n\nreturn result;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        -16
+      ],
+      "id": "e5f42091-d63d-4dc7-8d13-01b9be46987b",
+      "name": "Clean LLM output"
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "appJIKsrBNzrcrYx5",
+          "mode": "list",
+          "cachedResultName": "Client filteration",
+          "cachedResultUrl": "https://airtable.com/appJIKsrBNzrcrYx5"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblwODcGXwkor5KI1",
+          "mode": "list",
+          "cachedResultName": "Good or Bad",
+          "cachedResultUrl": "https://airtable.com/appJIKsrBNzrcrYx5/tblwODcGXwkor5KI1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Client Name": "={{ $json.name }}",
+            "Client Email": "={{ $json.email }}",
+            "Company Name": "={{ $json.companyName }}",
+            "Description": "={{ $json.projectDescription }}",
+            "Client status": "={{ $json.clientClassification }}",
+            "Justification": "={{ $json.justification }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Client Name",
+              "displayName": "Client Name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Client Email",
+              "displayName": "Client Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Company Name",
+              "displayName": "Company Name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Description",
+              "displayName": "Description",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Client status",
+              "displayName": "Client status",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "BIG CLIENT",
+                  "value": "BIG CLIENT"
+                },
+                {
+                  "name": "SMALL CLIENT",
+                  "value": "SMALL CLIENT"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Justification",
+              "displayName": "Justification",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.2,
+      "position": [
+        752,
+        -16
+      ],
+      "id": "ed54ce05-dbcd-49c1-9ea8-50f949002dc7",
+      "name": "Collect CRM data",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "Sv0yoeS8GuPAJW3Q",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ea3fd059-9f39-41d6-b8f0-b32ef6f4de52",
+              "leftValue": "={{ $json.fields['Client status'] }}",
+              "rightValue": "SMALL CLIENT",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        960,
+        -16
+      ],
+      "id": "68b9a216-5304-4ba3-be83-b035baeac23a",
+      "name": "Filter Client"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0B2L566UA2",
+          "mode": "list",
+          "cachedResultName": "all-aadis-wokspace"
+        },
+        "text": "=Alert:-{{ $json.fields['Client status'] }}\nAutomation Justification:-{{ $json.fields.Justification }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        1312,
+        -256
+      ],
+      "id": "9eeb11ec-b66c-4827-b6df-d7d0fbf327f7",
+      "name": "Alert Alarm For TEAM",
+      "webhookId": "81cd1938-c547-4890-b539-12ba7d9eb19c",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "12aPDFNb9Mj5wpjL",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.fields['Client Email'] }}",
+        "subject": "=Accelerating your workflow orchestration -{{ $json.fields['Company Name'] }}",
+        "emailType": "text",
+        "message": "=Hi {{ $json.fields['Client Name'] }},\n\nThank you for reaching out to us and sharing the operational challenges you are experiencing at {{ $json.fields['Company Name'] }}.   We have successfully received your project brief regarding your daily volume of -{{ $('Clean LLM output').item.json.companySize }} plus team requirements and the current bottlenecks in your data pipeline. Managing these cross-platform workflows manually is a significant drain on operational efficiency, and architecting an automated orchestration layer is exactly where our core expertise lies.  Given the scale of your objective and the timeline outlined in your description, we are treating this as a high-priority integration. Your allocated budget aligns well with our premium enterprise deployment standards, which ensure deep error-handling, secure database syncing, and full scalability.  We would welcome the opportunity to discuss the architectural roadmap for {{ $('Clean LLM output').item.json.companyName }} in more detail. \n\nContact info:-8360652686\n\nBest regards,\n\nTejender singh\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1312,
+        -32
+      ],
+      "id": "90aea7e8-d352-4731-a849-02fa3ff2b6a6",
+      "name": "BIG CLIENT email",
+      "webhookId": "ae755ee2-43e1-4e97-9d3a-eee0e3511e25",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "b616wHkIiFC5wqQd",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.fields['Client Email'] }}",
+        "subject": "=Exploring your automation ideas - {{ $json.fields['Company Name'] }}",
+        "message": "=Hi {{ $json.fields['Client Name'] }},\n\nThanks for reaching out and sharing what you are building at {{ $json.fields['Company Name'] }}! \n\nWe received your project form details, and it sounds like you have some great ideas for streamlining your everyday tasks. Eliminating those manual daily steps is the best way to reclaim your time and clear out administrative headaches so you can focus on growing.\n\nWe specialize in building efficient, reliable automations that fit perfectly into your current workflow footprint without overcomplicating things. Your project description and estimated budget align well with our standard growth setup packages, which are designed to get your integrations up and running quickly.\n\nTo map out your project details and ensure we build exactly what you need, let's jump on a quick introduction call.\n\nContact detail:- 8360652686,\nEmail:- addddizwrld@gmail.com\n\nWe're excited to help you optimize your workflows!\n\nBest regards,\n\nTejender singh",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1328,
+        192
+      ],
+      "id": "d6f3568b-5ae7-4c75-a271-0c6224ebd801",
+      "name": "SMALL CLIENT email",
+      "webhookId": "d7e2b0e6-ebb5-42ce-ad72-3983e434f0a9",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "b616wHkIiFC5wqQd",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "seprate data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Clean LLM output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "seprate data": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean LLM output": {
+      "main": [
+        [
+          {
+            "node": "Collect CRM data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect CRM data": {
+      "main": [
+        [
+          {
+            "node": "Filter Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Client": {
+      "main": [
+        [
+          {
+            "node": "Alert Alarm For TEAM",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "BIG CLIENT email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SMALL CLIENT email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "a71a4eb4-774a-4585-8845-b09b1c6e3f3b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f6973545116686097a20f8014587681d46413a37e2646020b7c22efad3b969e6"
+  },
+  "id": "oSzeOAxH6DwTu8QV",
+  "tags": []
+}
